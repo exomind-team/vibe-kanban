@@ -44,6 +44,9 @@ export type ExecutionStatus =
   | 'feedback'
   | 'edit';
 
+// TODO(issue #9, phase 2): re-enable when runtime steer injection is implemented.
+const SHOW_RUNNING_STEER = false;
+
 interface ActionsProps {
   onSend: () => void;
   onSteer: () => void;
@@ -331,7 +334,7 @@ export function SessionChatBox<TExecutor extends string = string>({
       feedbackMode?.onSubmitFeedback();
     } else if (isInEditMode && canSend) {
       editMode?.onSubmitEdit();
-    } else if (status === 'running' && canSend) {
+    } else if (status === 'running' && canSend && SHOW_RUNNING_STEER) {
       actions.onSteer();
     } else if (status === 'queued' && canSend) {
       actions.onSend();
@@ -528,12 +531,14 @@ export function SessionChatBox<TExecutor extends string = string>({
       case 'running':
         return (
           <>
-            <PrimaryButton
-              onClick={actions.onSteer}
-              disabled={!canSend}
-              value={t('conversation.actions.steer')}
-              title={t('conversation.actions.steerShortcutHint')}
-            />
+            {SHOW_RUNNING_STEER && (
+              <PrimaryButton
+                onClick={actions.onSteer}
+                disabled={!canSend}
+                value={t('conversation.actions.steer')}
+                title={t('conversation.actions.steerShortcutHint')}
+              />
+            )}
             <PrimaryButton
               onClick={actions.onQueue}
               disabled={!canSend}

@@ -94,3 +94,4 @@ vibe-kanban-cloud/
 *.ts.net.key
 Caddyfile
 Caddyfile.dev
+.cargo/config.toml

@@ -181,6 +181,18 @@ impl LocalContainerService {
         map.remove(id)
     }
 
+    async fn finalize_task_if_queue_empty(&self, ctx: &ExecutionContext) {
+        if self.queued_message_service.has_queued(ctx.session.id) {
+            tracing::info!(
+                "Skipping completion notification for session {} because queued follow-up messages remain",
+                ctx.session.id
+            );
+            return;
+        }
+
+        self.finalize_task(ctx).await;
+    }
+
     pub async fn cleanup_workspace(db: &DBService, workspace: &Workspace) {
         let Some(container_ref) = &workspace.container_ref else {
             return;
@@ -541,7 +553,7 @@ impl LocalContainerService {
                         );
 
                         // Manually finalize task since we're bypassing normal execution flow
-                        container.finalize_task(&ctx).await;
+                        container.finalize_task_if_queue_empty(&ctx).await;
                     }
                 }
 
@@ -584,10 +596,10 @@ impl LocalContainerService {
                                 // Put the message back so it can be retried/edited later.
                                 container.queued_message_service.requeue_front(queued_msg);
                                 // Fall back to finalization if follow-up fails
-                                container.finalize_task(&ctx).await;
+                                container.finalize_task_if_queue_empty(&ctx).await;
                             }
                         } else {
-                            container.finalize_task(&ctx).await;
+                            container.finalize_task_if_queue_empty(&ctx).await;
                         }
                     } else {
                         if container.queued_message_service.has_queued(ctx.session.id) {
@@ -597,7 +609,7 @@ impl LocalContainerService {
                                 ctx.execution_process.status
                             );
                         }
-                        container.finalize_task(&ctx).await;
+                        container.finalize_task_if_queue_empty(&ctx).await;
                     }
                 }
 
