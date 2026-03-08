@@ -1453,7 +1453,7 @@ export const queueApi = {
     const response = await makeRequest(
       `/api/sessions/${sessionId}/queue${query ? `?${query}` : ''}`,
       {
-      method: 'DELETE',
+        method: 'DELETE',
       }
     );
     return handleApiResponse<CancelQueueResponse>(response);

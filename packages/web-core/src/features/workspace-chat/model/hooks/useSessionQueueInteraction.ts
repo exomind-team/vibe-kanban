@@ -104,7 +104,8 @@ export function useSessionQueueInteraction({
 
   // Mutation for cancelling the queue
   const cancelMutation = useMutation({
-    mutationFn: (mode: QueueCancelMode = 'latest') => queueApi.cancel(sessionId!, mode),
+    mutationFn: (mode: QueueCancelMode = 'latest') =>
+      queueApi.cancel(sessionId!, mode),
     onSuccess: (response) => {
       queryClient.setQueryData([QUEUE_STATUS_KEY, sessionId], response.status);
     },
@@ -132,11 +133,14 @@ export function useSessionQueueInteraction({
     [sessionId, steerMutation]
   );
 
-  const cancelQueue = useCallback(async (mode: QueueCancelMode = 'latest') => {
-    if (!sessionId) return null;
-    const result = await cancelMutation.mutateAsync(mode);
-    return result.cancelled_message ?? null;
-  }, [sessionId, cancelMutation]);
+  const cancelQueue = useCallback(
+    async (mode: QueueCancelMode = 'latest') => {
+      if (!sessionId) return null;
+      const result = await cancelMutation.mutateAsync(mode);
+      return result.cancelled_message ?? null;
+    },
+    [sessionId, cancelMutation]
+  );
 
   const refreshQueueStatus = useCallback(async () => {
     if (!sessionId) return;
