@@ -11,6 +11,18 @@ use uuid::Uuid;
 use super::TaskServer;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpCreateSessionRequest {
+    #[schemars(
+        description = "The workspace ID to create the session in. Optional if running inside a workspace context."
+    )]
+    workspace_id: Option<Uuid>,
+    #[schemars(
+        description = "The coding agent executor to use ('CLAUDE_CODE', 'AMP', 'CODEX', 'GEMINI', 'OPENCODE', 'CURSOR_AGENT', 'QWEN_CODE', 'COPILOT', 'DROID'). Optional — can be set later when starting execution."
+    )]
+    executor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct McpListSessionsRequest {
     #[schemars(
         description = "Workspace ID to list sessions for. Optional if running inside a workspace context."
@@ -114,6 +126,55 @@ fn build_executor_config(
 
 #[tool_router(router = sessions_tools_router, vis = "pub")]
 impl TaskServer {
+    #[tool(
+        description = "Create a new session in an existing workspace. A workspace can have multiple sessions, each running a different executor (e.g. one CODEX session and one CLAUDE_CODE session). Each session maintains its own conversation history. Only one session can run an execution process at a time within a workspace."
+    )]
+    async fn create_session(
+        &self,
+        Parameters(McpCreateSessionRequest {
+            workspace_id,
+            executor,
+        }): Parameters<McpCreateSessionRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let workspace_id = match workspace_id {
+            Some(id) => id,
+            None => match self.context.as_ref() {
+                Some(ctx) => ctx.workspace_id,
+                None => {
+                    return Self::err(
+                        "workspace_id is required (not available from workspace context)",
+                        None::<&str>,
+                    );
+                }
+            },
+        };
+
+        let normalized_executor = if let Some(ref ex) = executor {
+            match validate_executor(ex) {
+                Ok(e) => Some(e),
+                Err(err) => return err,
+            }
+        } else {
+            None
+        };
+
+        let url = self.url("/api/sessions");
+        let mut payload = serde_json::json!({ "workspace_id": workspace_id });
+        if let Some(ex) = normalized_executor {
+            payload["executor"] = serde_json::json!(ex);
+        }
+
+        let session: serde_json::Value = match self
+            .send_json(self.client.post(&url).json(&payload))
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+
+        TaskServer::success(&session)
+    }
+
     #[tool(
         description = "List sessions for a workspace. Returns session IDs, executor info, and timestamps. Use workspace_id or relies on workspace context."
     )]
@@ -291,7 +352,12 @@ mod tests {
     use wiremock::matchers::{body_partial_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn init_tls() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
+
     async fn setup() -> (MockServer, TaskServer) {
+        init_tls();
         let mock = MockServer::start().await;
         let uri = mock.uri();
         let server = TaskServer::new(&uri);
@@ -314,6 +380,129 @@ mod tests {
             "expected error result, got success: {:?}",
             r.content
         );
+    }
+
+    #[tokio::test]
+    async fn create_session_returns_session() {
+        let (mock, server) = setup().await;
+        let wid = Uuid::new_v4();
+        let sid = Uuid::new_v4();
+
+        Mock::given(method("POST"))
+            .and(path("/api/sessions"))
+            .and(body_partial_json(serde_json::json!({
+                "workspace_id": wid,
+                "executor": "CLAUDE_CODE"
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": true,
+                    "data": {
+                        "id": sid,
+                        "workspace_id": wid,
+                        "executor": "CLAUDE_CODE",
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "updated_at": "2025-01-01T00:00:00Z"
+                    }
+                })),
+            )
+            .mount(&mock)
+            .await;
+
+        let result = server
+            .create_session(Parameters(McpCreateSessionRequest {
+                workspace_id: Some(wid),
+                executor: Some("CLAUDE_CODE".to_string()),
+            }))
+            .await;
+
+        assert_success(result);
+    }
+
+    #[tokio::test]
+    async fn create_session_without_executor() {
+        let (mock, server) = setup().await;
+        let wid = Uuid::new_v4();
+        let sid = Uuid::new_v4();
+
+        Mock::given(method("POST"))
+            .and(path("/api/sessions"))
+            .and(body_partial_json(serde_json::json!({
+                "workspace_id": wid
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": true,
+                    "data": {
+                        "id": sid,
+                        "workspace_id": wid,
+                        "executor": null,
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "updated_at": "2025-01-01T00:00:00Z"
+                    }
+                })),
+            )
+            .mount(&mock)
+            .await;
+
+        let result = server
+            .create_session(Parameters(McpCreateSessionRequest {
+                workspace_id: Some(wid),
+                executor: None,
+            }))
+            .await;
+
+        assert_success(result);
+    }
+
+    #[tokio::test]
+    async fn create_session_requires_workspace_id() {
+        let (_mock, server) = setup().await;
+
+        let result = server
+            .create_session(Parameters(McpCreateSessionRequest {
+                workspace_id: None,
+                executor: None,
+            }))
+            .await;
+
+        assert_error(result);
+    }
+
+    #[tokio::test]
+    async fn create_session_rejects_invalid_executor() {
+        let (_mock, server) = setup().await;
+        let wid = Uuid::new_v4();
+
+        let result = server
+            .create_session(Parameters(McpCreateSessionRequest {
+                workspace_id: Some(wid),
+                executor: Some("INVALID_EXECUTOR".to_string()),
+            }))
+            .await;
+
+        assert_error(result);
+    }
+
+    #[tokio::test]
+    async fn create_session_handles_api_error() {
+        let (mock, server) = setup().await;
+        let wid = Uuid::new_v4();
+
+        Mock::given(method("POST"))
+            .and(path("/api/sessions"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+
+        let result = server
+            .create_session(Parameters(McpCreateSessionRequest {
+                workspace_id: Some(wid),
+                executor: Some("CODEX".to_string()),
+            }))
+            .await;
+
+        assert_error(result);
     }
 
     #[tokio::test]
